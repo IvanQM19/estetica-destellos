@@ -179,14 +179,46 @@ function ProductsManager() {
     },
   });
 
-  const uploadImage = async (file: File): Promise<string> => {
-    const ext = file.name.split('.').pop();
-    const fileName = `${crypto.randomUUID()}.${ext}`;
-    const { error } = await supabase.storage.from('product-images').upload(fileName, file);
-    if (error) throw error;
-    const { data } = supabase.storage.from('product-images').getPublicUrl(fileName);
-    return data.publicUrl;
-  };
+  const optimizeImage = (file: File): Promise<Blob> => {
+  return new Promise((resolve) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+
+    img.onload = () => {
+      const maxWidth = 800;
+      const scale = Math.min(1, maxWidth / img.width);
+      const width = Math.floor(img.width * scale);
+      const height = Math.floor(img.height * scale);
+
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+
+      const ctx = canvas.getContext('2d')!;
+      ctx.drawImage(img, 0, 0, width, height);
+      URL.revokeObjectURL(url);
+
+      canvas.toBlob(
+        (blob) => resolve(blob!),
+        'image/webp',
+        0.8
+      );
+    };
+
+    img.src = url;
+  });
+};
+
+const uploadImage = async (file: File): Promise<string> => {
+  const optimizedBlob = await optimizeImage(file);
+  const fileName = `${crypto.randomUUID()}.webp`;
+  const { error } = await supabase.storage
+    .from('product-images')
+    .upload(fileName, optimizedBlob, { contentType: 'image/webp' });
+  if (error) throw error;
+  const { data } = supabase.storage.from('product-images').getPublicUrl(fileName);
+  return data.publicUrl;
+};
 
   const saveMutation = useMutation({
     mutationFn: async () => {
