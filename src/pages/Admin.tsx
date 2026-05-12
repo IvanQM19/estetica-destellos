@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
-import { Pencil, Trash2, Plus, LogOut, ArrowLeft } from 'lucide-react';
+import { Pencil, Trash2, Plus, LogOut, ArrowLeft, ImageIcon, Loader2 } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
@@ -74,42 +74,22 @@ function CategoriesManager() {
     },
   });
 
- const saveMutation = useMutation({
+  const saveMutation = useMutation({
     mutationFn: async () => {
-      console.log('1. Iniciando guardado...');
-      let image_url = existingImageUrl;
-      if (imageFile) {
-        console.log('2. Optimizando imagen...', imageFile.name, imageFile.size);
-        image_url = await uploadImage(imageFile);
-        console.log('3. Imagen subida:', image_url);
-      }
-      const productData = {
-        name,
-        description: description || null,
-        price: parseFloat(price),
-        category_id: categoryId || null,
-        image_url,
-      };
-      console.log('4. Guardando en BD...', productData);
       if (editingId) {
-        const { error } = await supabase.from('products').update(productData).eq('id', editingId);
-        if (error) { console.error('Error update:', error); throw error; }
+        const { error } = await supabase.from('categories').update({ name }).eq('id', editingId);
+        if (error) throw error;
       } else {
-        const { error } = await supabase.from('products').insert(productData);
-        if (error) { console.error('Error insert:', error); throw error; }
+        const { error } = await supabase.from('categories').insert({ name });
+        if (error) throw error;
       }
-      console.log('5. Guardado exitoso');
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['admin-products'] });
-      queryClient.invalidateQueries({ queryKey: ['products'] });
-      toast.success(editingId ? 'Producto actualizado' : 'Producto creado');
+      queryClient.invalidateQueries({ queryKey: ['categories'] });
+      toast.success(editingId ? 'Categoría actualizada' : 'Categoría creada');
       resetForm();
     },
-    onError: (error) => {
-      console.error('onError:', error);
-      toast.error('Error al guardar');
-    },
+    onError: () => toast.error('Error al guardar'),
   });
 
   const deleteMutation = useMutation({
@@ -148,7 +128,13 @@ function CategoriesManager() {
                 <Label>Nombre</Label>
                 <Input value={name} onChange={(e) => setName(e.target.value)} required />
               </div>
-              <Button type="submit" className="w-full" disabled={saveMutation.isPending}>Guardar</Button>
+              <Button type="submit" className="w-full" disabled={saveMutation.isPending}>
+                {saveMutation.isPending ? (
+                  <span className="flex items-center gap-2">
+                    <Loader2 className="h-4 w-4 animate-spin" /> Guardando...
+                  </span>
+                ) : 'Guardar'}
+              </Button>
             </form>
           </DialogContent>
         </Dialog>
@@ -170,6 +156,17 @@ function CategoriesManager() {
   );
 }
 
+// Estados del proceso de guardado
+type SaveStep = 'idle' | 'optimizing' | 'uploading' | 'saving' | 'done';
+
+const stepMessages: Record<SaveStep, string> = {
+  idle: 'Guardar',
+  optimizing: 'Optimizando imagen...',
+  uploading: 'Subiendo imagen...',
+  saving: 'Guardando producto...',
+  done: 'Guardado',
+};
+
 function ProductsManager() {
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
@@ -179,7 +176,9 @@ function ProductsManager() {
   const [price, setPrice] = useState('');
   const [categoryId, setCategoryId] = useState<string>('');
   const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [existingImageUrl, setExistingImageUrl] = useState<string | null>(null);
+  const [saveStep, setSaveStep] = useState<SaveStep>('idle');
 
   const { data: categories = [] } = useQuery({
     queryKey: ['categories'],
@@ -200,45 +199,53 @@ function ProductsManager() {
   });
 
   const optimizeImage = (file: File): Promise<Blob> => {
-  return new Promise((resolve) => {
-    const img = new Image();
-    const url = URL.createObjectURL(file);
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
 
-    img.onload = () => {
-      const maxWidth = 800;
-      const scale = Math.min(1, maxWidth / img.width);
-      const width = Math.floor(img.width * scale);
-      const height = Math.floor(img.height * scale);
+      img.onload = () => {
+        const maxWidth = 800;
+        const scale = Math.min(1, maxWidth / img.width);
+        const width = Math.floor(img.width * scale);
+        const height = Math.floor(img.height * scale);
 
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
 
-      const ctx = canvas.getContext('2d')!;
-      ctx.drawImage(img, 0, 0, width, height);
-      URL.revokeObjectURL(url);
+        const ctx = canvas.getContext('2d')!;
+        ctx.drawImage(img, 0, 0, width, height);
+        URL.revokeObjectURL(url);
 
-      canvas.toBlob(
-        (blob) => resolve(blob!),
-        'image/webp',
-        0.8
-      );
-    };
+        canvas.toBlob(
+          (blob) => {
+            if (blob) resolve(blob);
+            else reject(new Error('No se pudo optimizar la imagen'));
+          },
+          'image/webp',
+          0.8
+        );
+      };
 
-    img.src = url;
-  });
-};
+      img.onerror = () => reject(new Error('No se pudo cargar la imagen'));
+      img.src = url;
+    });
+  };
 
-const uploadImage = async (file: File): Promise<string> => {
-  const optimizedBlob = await optimizeImage(file);
-  const fileName = `${crypto.randomUUID()}.webp`;
-  const { error } = await supabase.storage
-    .from('product-images')
-    .upload(fileName, optimizedBlob, { contentType: 'image/webp' });
-  if (error) throw error;
-  const { data } = supabase.storage.from('product-images').getPublicUrl(fileName);
-  return data.publicUrl;
-};
+  const uploadImage = async (file: File): Promise<string> => {
+    setSaveStep('optimizing');
+    const optimizedBlob = await optimizeImage(file);
+
+    setSaveStep('uploading');
+    const fileName = `${crypto.randomUUID()}.webp`;
+    const { error } = await supabase.storage
+      .from('product-images')
+      .upload(fileName, optimizedBlob, { contentType: 'image/webp' });
+    if (error) throw error;
+
+    const { data } = supabase.storage.from('product-images').getPublicUrl(fileName);
+    return data.publicUrl;
+  };
 
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -246,6 +253,8 @@ const uploadImage = async (file: File): Promise<string> => {
       if (imageFile) {
         image_url = await uploadImage(imageFile);
       }
+
+      setSaveStep('saving');
       const productData = {
         name,
         description: description || null,
@@ -253,6 +262,7 @@ const uploadImage = async (file: File): Promise<string> => {
         category_id: categoryId || null,
         image_url,
       };
+
       if (editingId) {
         const { error } = await supabase.from('products').update(productData).eq('id', editingId);
         if (error) throw error;
@@ -262,13 +272,48 @@ const uploadImage = async (file: File): Promise<string> => {
       }
     },
     onSuccess: () => {
+      setSaveStep('done');
       queryClient.invalidateQueries({ queryKey: ['admin-products'] });
       queryClient.invalidateQueries({ queryKey: ['products'] });
       toast.success(editingId ? 'Producto actualizado' : 'Producto creado');
-      resetForm();
+      setTimeout(() => { resetForm(); }, 300);
     },
-    onError: () => toast.error('Error al guardar'),
+    onError: () => {
+      setSaveStep('idle');
+      toast.error('Error al guardar el producto');
+    },
   });
+
+  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] || null;
+    setImageFile(file);
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (ev) => setImagePreview(ev.target?.result as string);
+      reader.readAsDataURL(file);
+    } else {
+      setImagePreview(null);
+    }
+  };
+
+  const resetForm = () => {
+    setName(''); setDescription(''); setPrice(''); setCategoryId('');
+    setImageFile(null); setImagePreview(null); setExistingImageUrl(null);
+    setEditingId(null); setSaveStep('idle'); setOpen(false);
+  };
+
+  const startEdit = (p: typeof products[0]) => {
+    setEditingId(p.id);
+    setName(p.name);
+    setDescription(p.description || '');
+    setPrice(String(p.price));
+    setCategoryId(p.category_id || '');
+    setExistingImageUrl(p.image_url);
+    setImageFile(null);
+    setImagePreview(null);
+    setSaveStep('idle');
+    setOpen(true);
+  };
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
@@ -280,23 +325,11 @@ const uploadImage = async (file: File): Promise<string> => {
       queryClient.invalidateQueries({ queryKey: ['products'] });
       toast.success('Producto eliminado');
     },
+    onError: () => toast.error('Error al eliminar'),
   });
 
-  const resetForm = () => {
-    setName(''); setDescription(''); setPrice(''); setCategoryId('');
-    setImageFile(null); setExistingImageUrl(null); setEditingId(null); setOpen(false);
-  };
-
-  const startEdit = (p: typeof products[0]) => {
-    setEditingId(p.id);
-    setName(p.name);
-    setDescription(p.description || '');
-    setPrice(String(p.price));
-    setCategoryId(p.category_id || '');
-    setExistingImageUrl(p.image_url);
-    setImageFile(null);
-    setOpen(true);
-  };
+  const isBusy = saveMutation.isPending;
+  const previewSrc = imagePreview || existingImageUrl;
 
   return (
     <div>
@@ -313,19 +346,19 @@ const uploadImage = async (file: File): Promise<string> => {
             <form onSubmit={(e) => { e.preventDefault(); saveMutation.mutate(); }} className="space-y-4">
               <div>
                 <Label>Nombre</Label>
-                <Input value={name} onChange={(e) => setName(e.target.value)} required />
+                <Input value={name} onChange={(e) => setName(e.target.value)} required disabled={isBusy} />
               </div>
               <div>
                 <Label>Descripción</Label>
-                <Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} />
+                <Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} disabled={isBusy} />
               </div>
               <div>
                 <Label>Precio</Label>
-                <Input type="number" step="0.01" min="0" value={price} onChange={(e) => setPrice(e.target.value)} required />
+                <Input type="number" step="0.01" min="0" value={price} onChange={(e) => setPrice(e.target.value)} required disabled={isBusy} />
               </div>
               <div>
                 <Label>Categoría</Label>
-                <Select value={categoryId} onValueChange={setCategoryId}>
+                <Select value={categoryId} onValueChange={setCategoryId} disabled={isBusy}>
                   <SelectTrigger><SelectValue placeholder="Seleccionar categoría" /></SelectTrigger>
                   <SelectContent>
                     {categories.map((cat) => (
@@ -336,12 +369,72 @@ const uploadImage = async (file: File): Promise<string> => {
               </div>
               <div>
                 <Label>Imagen</Label>
-                <Input type="file" accept="image/*" onChange={(e) => setImageFile(e.target.files?.[0] || null)} />
-                {existingImageUrl && !imageFile && (
-                  <img src={existingImageUrl} alt="Preview" className="mt-2 h-20 w-20 object-cover rounded-lg" />
+                <Input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,image/jpg"
+                  onChange={handleImageChange}
+                  disabled={isBusy}
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Formatos: JPG, PNG, WEBP · Se optimizará automáticamente a WEBP
+                </p>
+
+                {/* Preview de imagen */}
+                {previewSrc && (
+                  <div className="mt-2 relative w-24 h-24">
+                    <img
+                      src={previewSrc}
+                      alt="Preview"
+                      className="h-24 w-24 object-cover rounded-lg border border-border"
+                    />
+                  </div>
+                )}
+
+                {/* Indicador de progreso */}
+                {isBusy && (
+                  <div className="mt-3 rounded-lg border border-border bg-muted/50 p-3">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin text-primary flex-shrink-0" />
+                      <span>{stepMessages[saveStep]}</span>
+                    </div>
+                    {/* Barra de progreso */}
+                    <div className="mt-2 h-1.5 w-full rounded-full bg-border overflow-hidden">
+                      <div
+                        className="h-full bg-primary rounded-full transition-all duration-500"
+                        style={{
+                          width:
+                            saveStep === 'optimizing' ? '33%' :
+                            saveStep === 'uploading' ? '66%' :
+                            saveStep === 'saving' ? '90%' :
+                            saveStep === 'done' ? '100%' : '0%'
+                        }}
+                      />
+                    </div>
+                    <div className="mt-1.5 flex justify-between text-xs text-muted-foreground">
+                      <span className={saveStep === 'optimizing' ? 'text-primary font-medium' : ''}>Optimizar</span>
+                      <span className={saveStep === 'uploading' ? 'text-primary font-medium' : ''}>Subir</span>
+                      <span className={saveStep === 'saving' ? 'text-primary font-medium' : ''}>Guardar</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Si no hay imagen */}
+                {!previewSrc && !isBusy && (
+                  <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+                    <ImageIcon className="h-3 w-3" />
+                    <span>Sin imagen seleccionada</span>
+                  </div>
                 )}
               </div>
-              <Button type="submit" className="w-full" disabled={saveMutation.isPending}>Guardar</Button>
+
+              <Button type="submit" className="w-full" disabled={isBusy}>
+                {isBusy ? (
+                  <span className="flex items-center gap-2">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    {stepMessages[saveStep]}
+                  </span>
+                ) : 'Guardar'}
+              </Button>
             </form>
           </DialogContent>
         </Dialog>
@@ -353,11 +446,13 @@ const uploadImage = async (file: File): Promise<string> => {
             {p.image_url ? (
               <img src={p.image_url} alt={p.name} className="h-12 w-12 rounded-lg object-cover flex-shrink-0" />
             ) : (
-              <div className="h-12 w-12 rounded-lg bg-muted flex-shrink-0" />
+              <div className="h-12 w-12 rounded-lg bg-muted flex items-center justify-center flex-shrink-0">
+                <ImageIcon className="h-5 w-5 text-muted-foreground" />
+              </div>
             )}
             <div className="flex-1 min-w-0">
               <p className="font-medium truncate">{p.name}</p>
-              <p className="text-sm text-muted-foreground">${p.price} · {p.categories?.name || 'Sin categoría'}</p>
+              <p className="text-sm text-muted-foreground">${p.price} MXN · {p.categories?.name || 'Sin categoría'}</p>
             </div>
             <div className="flex gap-1 flex-shrink-0">
               <Button variant="ghost" size="icon" onClick={() => startEdit(p)}><Pencil className="h-4 w-4" /></Button>
