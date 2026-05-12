@@ -74,22 +74,42 @@ function CategoriesManager() {
     },
   });
 
-  const saveMutation = useMutation({
+ const saveMutation = useMutation({
     mutationFn: async () => {
-      if (editingId) {
-        const { error } = await supabase.from('categories').update({ name }).eq('id', editingId);
-        if (error) throw error;
-      } else {
-        const { error } = await supabase.from('categories').insert({ name });
-        if (error) throw error;
+      console.log('1. Iniciando guardado...');
+      let image_url = existingImageUrl;
+      if (imageFile) {
+        console.log('2. Optimizando imagen...', imageFile.name, imageFile.size);
+        image_url = await uploadImage(imageFile);
+        console.log('3. Imagen subida:', image_url);
       }
+      const productData = {
+        name,
+        description: description || null,
+        price: parseFloat(price),
+        category_id: categoryId || null,
+        image_url,
+      };
+      console.log('4. Guardando en BD...', productData);
+      if (editingId) {
+        const { error } = await supabase.from('products').update(productData).eq('id', editingId);
+        if (error) { console.error('Error update:', error); throw error; }
+      } else {
+        const { error } = await supabase.from('products').insert(productData);
+        if (error) { console.error('Error insert:', error); throw error; }
+      }
+      console.log('5. Guardado exitoso');
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['categories'] });
-      toast.success(editingId ? 'Categoría actualizada' : 'Categoría creada');
+      queryClient.invalidateQueries({ queryKey: ['admin-products'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      toast.success(editingId ? 'Producto actualizado' : 'Producto creado');
       resetForm();
     },
-    onError: () => toast.error('Error al guardar'),
+    onError: (error) => {
+      console.error('onError:', error);
+      toast.error('Error al guardar');
+    },
   });
 
   const deleteMutation = useMutation({
