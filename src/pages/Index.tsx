@@ -18,7 +18,8 @@ const Index = () => {
     },
   });
 
-  const { data: products = [], isLoading } = useQuery({
+  //const { data: products = [], isLoading } = useQuery({
+    const { data: products = [], isLoading, isError } = useQuery({
     queryKey: ['products', selectedCategory, searchQuery],
     queryFn: async () => {
       let query = supabase.from('products').select('*, categories(name)').order('created_at', { ascending: false });
@@ -69,6 +70,12 @@ const Index = () => {
                 </div>
               </div>
             ))}
+          </div>
+        ) : isError ? (
+          <div className="text-center py-20">
+            <p className="text-muted-foreground font-body text-lg">
+              Error al cargar productos. Intenta recargar la página.
+            </p>
           </div>
         ) : products.length === 0 ? (
           <div className="text-center py-20">
